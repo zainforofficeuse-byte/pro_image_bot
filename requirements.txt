@@ -1,0 +1,8 @@
+streamlit
+rembg
+Pillow
+numpy
+transformers
+torch
+requests
+beautifulsoup4
