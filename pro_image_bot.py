@@ -1,6 +1,6 @@
 import streamlit as st
 from PIL import Image, ImageFilter, ImageEnhance
-from rembg import remove
+# Rembg ko yahan se hata kar function k andar dal diya hai taake app fast load ho
 import io
 import numpy as np
 import json
@@ -71,14 +71,12 @@ def scrape_features_from_url(url):
             if content: features.append(content[:100] + "...") # Limit length
             
         # 2. Bullet Points (ul/li usually contain specs)
-        # E-commerce sites par aksar specs <ul> mein hotay hain
         ul_tags = soup.find_all('ul')
         for ul in ul_tags:
-            # Check agar list mein meaningful data hai
             items = [li.get_text(strip=True) for li in ul.find_all('li') if len(li.get_text(strip=True)) > 5]
             if len(items) > 2 and len(items) < 15: # Filter junk lists
                 features.extend(items[:5]) # Top 5 points utha lo
-                break # Pehli achi list mil gayi to ruk jao
+                break 
         
         # 3. Agar kuch na mile to Title utha lo
         if not features:
@@ -129,6 +127,9 @@ with tab1:
         except: return image
 
     def process_single_image(uploaded_file):
+        # Lazy Import: Taake app jaldi load ho
+        from rembg import remove
+        
         original = Image.open(uploaded_file)
         no_bg = remove(original)
         if no_bg.getbbox(): no_bg = no_bg.crop(no_bg.getbbox())
@@ -156,13 +157,25 @@ with tab1:
         return final_canvas
 
     editor_files = st.file_uploader("Upload Images for Editing", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="editor_uploader")
-    if editor_files and st.button("Process Images"):
-        for f in editor_files:
-            res = process_single_image(f)
-            buf = io.BytesIO()
-            res.save(buf, format="JPEG", quality=95)
-            st.image(res, width=200)
-            st.download_button("Download JPG", data=buf.getvalue(), file_name=f"Pro_{f.name}.jpg", mime="image/jpeg")
+    
+    if editor_files:
+        if st.button("🚀 Process Images"):
+            # Progress bar for better UX
+            with st.spinner("Processing... (First time may take 1-2 mins to download AI models)"):
+                for f in editor_files:
+                    try:
+                        res = process_single_image(f)
+                        buf = io.BytesIO()
+                        res.save(buf, format="JPEG", quality=95)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1: st.image(f, caption="Original", width=150)
+                        with col2: st.image(res, caption="Pro Version", width=150)
+                        
+                        st.download_button(f"⬇️ Download {f.name}", data=buf.getvalue(), file_name=f"Pro_{f.name}.jpg", mime="image/jpeg")
+                        st.divider()
+                    except Exception as e:
+                        st.error(f"Error processing {f.name}: {e}")
 
 # ==========================================
 # TAB 2: SMART AI PROMPT BUILDER
