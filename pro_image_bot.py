@@ -7,23 +7,47 @@ import requests
 from bs4 import BeautifulSoup
 
 # --- PAGE CONFIG (Sab se pehle ana chahiye) ---
-st.set_page_config(page_title="Pro Image & Prompt Bot", layout="wide")
+st.set_page_config(page_title="Pro Image Bot V2 (Lightweight)", layout="wide")
 
-# --- AI LIBRARIES (Lazy Load with Status) ---
-@st.cache_resource
-def load_ai_model():
-    """AI Model ko cache karta hai"""
-    status = st.empty()
-    status.info("⏳ AI Model Loading... (Sirf pehli baar waqt lagega)")
+# --- HUGGING FACE API HELPER (No Local Heavy Model) ---
+def get_ai_vision_analysis(pil_image, api_key):
+    """
+    Hugging Face API ko use kar k image describe karta hai.
+    Faida: Local RAM use nahi hoti, Streamlit Cloud par fast chalta hai.
+    """
+    if not api_key:
+        return "Error: API Key missing. Please enter Hugging Face Token."
+
+    API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
     try:
-        from transformers import BlipProcessor, BlipForConditionalGeneration
-        processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-        model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
-        status.empty() # Remove message when done
-        return processor, model
+        # Convert Image to Bytes
+        img_byte_arr = io.BytesIO()
+        # Ensure format is valid
+        fmt = pil_image.format if pil_image.format else 'JPEG'
+        pil_image.save(img_byte_arr, format=fmt)
+        img_data = img_byte_arr.getvalue()
+
+        response = requests.post(API_URL, headers=headers, data=img_data)
+        
+        if response.status_code != 200:
+            # Model loading error (common in free tier) handling
+            if "loading" in response.text.lower():
+                return "Model is loading on server... Please try again in 30 seconds."
+            return f"API Error {response.status_code}: {response.text}"
+            
+        result = response.json()
+        # Response format usually: [{'generated_text': 'description...'}]
+        if isinstance(result, list) and len(result) > 0 and 'generated_text' in result[0]:
+            return result[0]['generated_text']
+        elif isinstance(result, dict) and 'error' in result:
+            return f"API Error: {result['error']}"
+            
+        return "No description generated."
+        
     except Exception as e:
-        status.error(f"AI Model Error: {e}")
-        return None, None
+        return f"Connection Error: {e}"
 
 # --- HELPER: BACKGROUND SUGGESTIONS ---
 def get_background_suggestions(query_text, visual_text):
@@ -89,7 +113,15 @@ def scrape_features_from_url(url):
         return f"Scraping Failed: {e}"
 
 # --- MAIN UI ---
-st.title("📸 Pro Image Studio & AI Prompts")
+st.title("📸 Pro Image Studio V2 (API Mode)")
+st.caption("Lightweight & Fast - Powered by Hugging Face API")
+
+# --- SIDEBAR API KEY ---
+with st.sidebar:
+    st.header("🔑 API Setup")
+    api_key = st.text_input("Hugging Face Token", type="password", help="Get free token from huggingface.co/settings/tokens")
+    if not api_key:
+        st.warning("⚠️ Please enter API Token to use Smart Features.")
 
 # --- TABS ---
 tab1, tab2 = st.tabs(["🎨 Image Editor", "🧠 Smart AI Prompt Builder"])
@@ -128,13 +160,13 @@ with tab1:
 
     def process_single_image(uploaded_file):
         status_box = st.empty()
-        status_box.info("⏳ Removing Background... (Checking Libraries)")
+        status_box.info("⏳ Starting Process...")
         
         try:
             # Lazy Import inside function to prevent app freeze
             from rembg import remove
             
-            status_box.info("⏳ Processing Image...")
+            status_box.info("⏳ Removing Background...")
             original = Image.open(uploaded_file)
             no_bg = remove(original)
             
@@ -165,7 +197,7 @@ with tab1:
             return final_canvas
             
         except ImportError:
-            status_box.error("Error: 'rembg' library missing. Terminal mein `pip install rembg` likhein.")
+            status_box.error("Error: 'rembg' library missing. Ensure packages.txt is correct.")
             return None
         except Exception as e:
             status_box.error(f"Error: {e}")
@@ -205,7 +237,7 @@ with tab2:
                     else: st.error(scraped)
 
     with col2:
-        prompt_file = st.file_uploader("Product Image (For AI)", type=['png', 'jpg', 'jpeg', 'webp'], key="prompt_uploader")
+        prompt_file = st.file_uploader("Product Image (For Visual AI Analysis)", type=['png', 'jpg', 'jpeg', 'webp'], key="prompt_uploader")
 
     default_val = st.session_state.get('scraped_features', "Adaptive ANC, Hi-Res Audio, 6-Mic AI Call, Bluetooth 5.3, Long Battery")
     features_input = st.text_area("Features", value=default_val, height=100)
@@ -213,32 +245,37 @@ with tab2:
     if 'style_options' not in st.session_state: st.session_state['style_options'] = {}
     if 'visual_context' not in st.session_state: st.session_state['visual_context'] = ""
 
-    if st.button("🔍 Analyze"):
-        with st.spinner("Analyzing... (Downloading AI Model if first time)"):
-            
-            # A. Visual Analysis
-            visual_desc = ""
-            if prompt_file:
-                processor, model = load_ai_model() # This is cached
-                if processor and model:
+    if st.button("🔍 Analyze with API"):
+        if not api_key:
+            st.error("Please enter Hugging Face API Token in the Sidebar first!")
+        else:
+            with st.spinner("Analyzing via Cloud API..."):
+                
+                # A. Visual Analysis via API
+                visual_desc = ""
+                if prompt_file:
                     try:
                         raw_image = Image.open(prompt_file).convert('RGB')
-                        inputs = processor(raw_image, return_tensors="pt")
-                        out = model.generate(**inputs)
-                        visual_desc = processor.decode(out[0], skip_special_tokens=True)
-                    except: pass
-            
-            st.session_state['visual_context'] = visual_desc
-            
-            # B. Styles
-            full_context = f"{product_name} {ref_link} {visual_desc}"
-            st.session_state['style_options'] = get_background_suggestions(product_name, full_context)
-            st.success("Complete!")
+                        # Call API instead of local model
+                        visual_desc = get_ai_vision_analysis(raw_image, api_key)
+                    except Exception as e:
+                        st.error(f"Image Error: {e}")
+                
+                if "Error" in visual_desc:
+                    st.warning(f"AI Warning: {visual_desc}")
+                    visual_desc = "product shot"
+                
+                st.session_state['visual_context'] = visual_desc
+                
+                # B. Styles
+                full_context = f"{product_name} {ref_link} {visual_desc}"
+                st.session_state['style_options'] = get_background_suggestions(product_name, full_context)
+                st.success("Analysis Complete!")
 
     if st.session_state['style_options']:
         st.divider()
         if st.session_state['visual_context']:
-            st.caption(f"AI Saw: *{st.session_state['visual_context']}*")
+            st.caption(f"AI Detected: *{st.session_state['visual_context']}*")
 
         style_choice = st.radio("Choose Style:", list(st.session_state['style_options'].keys()))
         selected_bg = st.session_state['style_options'][style_choice]
