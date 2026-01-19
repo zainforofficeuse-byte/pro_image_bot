@@ -1,22 +1,28 @@
 import streamlit as st
 from PIL import Image, ImageFilter, ImageEnhance
-# Rembg ko yahan se hata kar function k andar dal diya hai taake app fast load ho
 import io
 import numpy as np
 import json
 import requests
 from bs4 import BeautifulSoup
 
-# --- AI LIBRARIES (Lazy Load) ---
+# --- PAGE CONFIG (Sab se pehle ana chahiye) ---
+st.set_page_config(page_title="Pro Image & Prompt Bot", layout="wide")
+
+# --- AI LIBRARIES (Lazy Load with Status) ---
 @st.cache_resource
 def load_ai_model():
     """AI Model ko cache karta hai"""
+    status = st.empty()
+    status.info("⏳ AI Model Loading... (Sirf pehli baar waqt lagega)")
     try:
         from transformers import BlipProcessor, BlipForConditionalGeneration
         processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
         model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+        status.empty() # Remove message when done
         return processor, model
     except Exception as e:
+        status.error(f"AI Model Error: {e}")
         return None, None
 
 # --- HELPER: BACKGROUND SUGGESTIONS ---
@@ -52,45 +58,37 @@ def get_background_suggestions(query_text, visual_text):
 
 # --- HELPER: SCRAPE FEATURES ---
 def scrape_features_from_url(url):
-    """Website se Title, Description aur Bullet Points nikalta hai"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200: return f"Error: Status {response.status_code}"
         
-        if response.status_code != 200:
-            return f"Error: Website not accessible (Status {response.status_code})"
-            
         soup = BeautifulSoup(response.content, 'html.parser')
-        
         features = []
         
-        # 1. Meta Description
+        # Meta Desc
         meta_desc = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
         if meta_desc:
             content = meta_desc.get('content', '').strip()
-            if content: features.append(content[:100] + "...") # Limit length
+            if content: features.append(content[:100] + "...")
             
-        # 2. Bullet Points (ul/li usually contain specs)
+        # Ul/Li Bullet Points
         ul_tags = soup.find_all('ul')
         for ul in ul_tags:
             items = [li.get_text(strip=True) for li in ul.find_all('li') if len(li.get_text(strip=True)) > 5]
-            if len(items) > 2 and len(items) < 15: # Filter junk lists
-                features.extend(items[:5]) # Top 5 points utha lo
+            if len(items) > 2 and len(items) < 15:
+                features.extend(items[:5])
                 break 
         
-        # 3. Agar kuch na mile to Title utha lo
         if not features:
             title = soup.find('title')
             if title: features.append(title.get_text(strip=True))
             
         return ", ".join(features)
-        
     except Exception as e:
         return f"Scraping Failed: {e}"
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="Pro Image & Prompt Bot", layout="wide")
-
+# --- MAIN UI ---
 st.title("📸 Pro Image Studio & AI Prompts")
 
 # --- TABS ---
@@ -102,9 +100,11 @@ tab1, tab2 = st.tabs(["🎨 Image Editor", "🧠 Smart AI Prompt Builder"])
 with tab1:
     st.header("Basic Image Editor")
     
-    add_shadow = st.sidebar.checkbox("Add Drop Shadow (Tab 1)", value=False)
-    enhance_image = st.sidebar.checkbox("Enhance Quality (Tab 1)", value=True)
-    product_scale = st.sidebar.slider("Product Size % (Tab 1)", 50, 100, 75, 5) / 100.0
+    col_s1, col_s2, col_s3 = st.columns(3)
+    with col_s1: add_shadow = st.checkbox("Add Shadow", value=False)
+    with col_s2: enhance_image = st.checkbox("Enhance Quality", value=True)
+    with col_s3: product_scale = st.slider("Size %", 50, 100, 75, 5) / 100.0
+    
     CANVAS_SIZE = (1080, 1080)
     BACKGROUND_COLOR = (255, 255, 255)
 
@@ -127,169 +127,148 @@ with tab1:
         except: return image
 
     def process_single_image(uploaded_file):
-        # Lazy Import: Taake app jaldi load ho
-        from rembg import remove
+        status_box = st.empty()
+        status_box.info("⏳ Removing Background... (Checking Libraries)")
         
-        original = Image.open(uploaded_file)
-        no_bg = remove(original)
-        if no_bg.getbbox(): no_bg = no_bg.crop(no_bg.getbbox())
-        
-        if enhance_image:
-            enhancer = ImageEnhance.Sharpness(no_bg)
-            no_bg = enhancer.enhance(1.2)
-            enhancer = ImageEnhance.Color(no_bg)
-            no_bg = enhancer.enhance(1.1)
-        
-        if add_shadow: final_obj = add_drop_shadow_effect(no_bg)
-        else: final_obj = no_bg
+        try:
+            # Lazy Import inside function to prevent app freeze
+            from rembg import remove
             
-        final_canvas = Image.new("RGB", CANVAS_SIZE, BACKGROUND_COLOR)
-        target_w = int(CANVAS_SIZE[0] * product_scale)
-        target_h = int(CANVAS_SIZE[1] * product_scale)
-        final_obj.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
-        
-        bg_w, bg_h = final_canvas.size
-        img_w, img_h = final_obj.size
-        offset = ((bg_w - img_w) // 2, (bg_h - img_h) // 2)
-        
-        if final_obj.mode == 'RGBA': final_canvas.paste(final_obj, offset, final_obj)
-        else: final_canvas.paste(final_obj, offset)
-        return final_canvas
+            status_box.info("⏳ Processing Image...")
+            original = Image.open(uploaded_file)
+            no_bg = remove(original)
+            
+            if no_bg.getbbox(): no_bg = no_bg.crop(no_bg.getbbox())
+            
+            if enhance_image:
+                enhancer = ImageEnhance.Sharpness(no_bg)
+                no_bg = enhancer.enhance(1.2)
+                enhancer = ImageEnhance.Color(no_bg)
+                no_bg = enhancer.enhance(1.1)
+            
+            if add_shadow: final_obj = add_drop_shadow_effect(no_bg)
+            else: final_obj = no_bg
+                
+            final_canvas = Image.new("RGB", CANVAS_SIZE, BACKGROUND_COLOR)
+            target_w = int(CANVAS_SIZE[0] * product_scale)
+            target_h = int(CANVAS_SIZE[1] * product_scale)
+            final_obj.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+            
+            bg_w, bg_h = final_canvas.size
+            img_w, img_h = final_obj.size
+            offset = ((bg_w - img_w) // 2, (bg_h - img_h) // 2)
+            
+            if final_obj.mode == 'RGBA': final_canvas.paste(final_obj, offset, final_obj)
+            else: final_canvas.paste(final_obj, offset)
+            
+            status_box.empty()
+            return final_canvas
+            
+        except ImportError:
+            status_box.error("Error: 'rembg' library missing. Terminal mein `pip install rembg` likhein.")
+            return None
+        except Exception as e:
+            status_box.error(f"Error: {e}")
+            return None
 
-    editor_files = st.file_uploader("Upload Images for Editing", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="editor_uploader")
+    editor_files = st.file_uploader("Upload Images", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="editor_uploader")
     
-    if editor_files:
-        if st.button("🚀 Process Images"):
-            # Progress bar for better UX
-            with st.spinner("Processing... (First time may take 1-2 mins to download AI models)"):
-                for f in editor_files:
-                    try:
-                        res = process_single_image(f)
-                        buf = io.BytesIO()
-                        res.save(buf, format="JPEG", quality=95)
-                        
-                        col1, col2 = st.columns(2)
-                        with col1: st.image(f, caption="Original", width=150)
-                        with col2: st.image(res, caption="Pro Version", width=150)
-                        
-                        st.download_button(f"⬇️ Download {f.name}", data=buf.getvalue(), file_name=f"Pro_{f.name}.jpg", mime="image/jpeg")
-                        st.divider()
-                    except Exception as e:
-                        st.error(f"Error processing {f.name}: {e}")
+    if editor_files and st.button("🚀 Process Images"):
+        for f in editor_files:
+            res = process_single_image(f)
+            if res:
+                buf = io.BytesIO()
+                res.save(buf, format="JPEG", quality=95)
+                col1, col2 = st.columns(2)
+                with col1: st.image(f, caption="Original", width=150)
+                with col2: st.image(res, caption="Pro Version", width=150)
+                st.download_button(f"⬇️ Download {f.name}", data=buf.getvalue(), file_name=f"Pro_{f.name}.jpg", mime="image/jpeg")
+                st.divider()
 
 # ==========================================
 # TAB 2: SMART AI PROMPT BUILDER
 # ==========================================
 with tab2:
     st.header("🧠 Smart Context-Aware Prompts")
-    st.markdown("Product ka naam ya link dein, bot khud samjhega ke background kaisa hona chahiye.")
-    st.divider()
-
-    # --- STEP 1: INPUTS ---
+    
     col1, col2 = st.columns([1, 1])
     with col1:
-        product_name = st.text_input("Product Name (Required)", value="QCY AilyBuds Pro+")
-        ref_link = st.text_input("Official Product Link (Optional)", placeholder="https://example.com/product")
+        product_name = st.text_input("Product Name", value="QCY AilyBuds Pro+")
+        ref_link = st.text_input("Product Link", placeholder="https://example.com")
         
-        # --- NEW: AUTO SCRAPE BUTTON ---
-        if st.button("🌐 Fetch Features from Link"):
+        if st.button("🌐 Fetch Features"):
             if ref_link:
-                with st.spinner("Scraping website..."):
-                    scraped_text = scrape_features_from_url(ref_link)
-                    if "Error" not in scraped_text:
-                        st.session_state['scraped_features'] = scraped_text
-                        st.success("Features found!")
-                    else:
-                        st.error(scraped_text)
-            else:
-                st.warning("Pehle Link dalein!")
+                with st.spinner("Scraping..."):
+                    scraped = scrape_features_from_url(ref_link)
+                    st.session_state['scraped_features'] = scraped
+                    if "Error" not in scraped: st.success("Done!")
+                    else: st.error(scraped)
 
     with col2:
-        prompt_file = st.file_uploader("Product Image (Optional - For Visual AI)", type=['png', 'jpg', 'jpeg', 'webp'], key="prompt_uploader")
+        prompt_file = st.file_uploader("Product Image (For AI)", type=['png', 'jpg', 'jpeg', 'webp'], key="prompt_uploader")
 
-    # Features Input (Auto-filled if scraped)
     default_val = st.session_state.get('scraped_features', "Adaptive ANC, Hi-Res Audio, 6-Mic AI Call, Bluetooth 5.3, Long Battery")
-    features_input = st.text_area("Features List (Auto-filled from link or Type manually)", value=default_val, height=150)
+    features_input = st.text_area("Features", value=default_val, height=100)
 
-    # Session State
     if 'style_options' not in st.session_state: st.session_state['style_options'] = {}
     if 'visual_context' not in st.session_state: st.session_state['visual_context'] = ""
 
-    # --- STEP 2: ANALYZE & SUGGEST ---
-    if st.button("🔍 Analyze Product & Suggest Styles"):
-        with st.spinner("AI analyzing visuals and context..."):
+    if st.button("🔍 Analyze"):
+        with st.spinner("Analyzing... (Downloading AI Model if first time)"):
             
-            # A. Visual Analysis (BLIP)
+            # A. Visual Analysis
             visual_desc = ""
             if prompt_file:
-                try:
-                    processor, model = load_ai_model()
-                    if processor and model:
+                processor, model = load_ai_model() # This is cached
+                if processor and model:
+                    try:
                         raw_image = Image.open(prompt_file).convert('RGB')
                         inputs = processor(raw_image, return_tensors="pt")
                         out = model.generate(**inputs)
                         visual_desc = processor.decode(out[0], skip_special_tokens=True)
-                except: pass
+                    except: pass
             
             st.session_state['visual_context'] = visual_desc
             
             # B. Styles
-            full_context_text = f"{product_name} {ref_link} {visual_desc}"
-            st.session_state['style_options'] = get_background_suggestions(product_name, full_context_text)
-            st.success("Analysis Complete! Please select a style below.")
+            full_context = f"{product_name} {ref_link} {visual_desc}"
+            st.session_state['style_options'] = get_background_suggestions(product_name, full_context)
+            st.success("Complete!")
 
-    # --- STEP 3: SELECT & GENERATE ---
     if st.session_state['style_options']:
         st.divider()
-        st.subheader("🎨 Choose a Style Direction")
-        
         if st.session_state['visual_context']:
-            st.caption(f"AI Visual Detection: *{st.session_state['visual_context']}*")
+            st.caption(f"AI Saw: *{st.session_state['visual_context']}*")
 
-        style_choice = st.radio(
-            "AI ne yeh 3 options suggest kiye hain:",
-            list(st.session_state['style_options'].keys()),
-            format_func=lambda x: f"**{x}** : {st.session_state['style_options'][x]}"
-        )
-        
-        selected_bg_prompt = st.session_state['style_options'][style_choice]
+        style_choice = st.radio("Choose Style:", list(st.session_state['style_options'].keys()))
+        selected_bg = st.session_state['style_options'][style_choice]
 
-        st.divider()
-        if st.button("✨ Generate Final JSON Prompts"):
-            
+        if st.button("✨ Generate JSON"):
             lines = features_input.split(',')
             prompts_output = []
-            LOCKED_LAYOUT = "wide horizontal banner"
-            LOCKED_STYLE = "professional ecommerce product visualization"
-
-            if st.session_state['visual_context']:
-                base_comp = f"{st.session_state['visual_context']}, centered hero shot"
-            else:
-                base_comp = f"hero shot of {product_name}, centered"
+            
+            base_comp = f"{st.session_state['visual_context']}, centered hero shot" if st.session_state['visual_context'] else f"hero shot of {product_name}, centered"
 
             for line in lines:
                 feat = line.strip()
                 if not feat: continue
                 
-                vis_elem = "minimal elegant product focus"
+                vis_elem = "minimal product focus"
                 f_lower = feat.lower()
-                if "anc" in f_lower or "noise" in f_lower: vis_elem = "soft sound wave ripples"
-                elif "water" in f_lower or "proof" in f_lower: vis_elem = "fresh water splash or droplets"
-                elif "battery" in f_lower or "power" in f_lower: vis_elem = "glowing energy ring"
-                elif "bluetooth" in f_lower: vis_elem = "wireless signal waves"
+                if "anc" in f_lower or "noise" in f_lower: vis_elem = "sound wave ripples"
+                elif "water" in f_lower: vis_elem = "water splash"
+                elif "battery" in f_lower: vis_elem = "glowing energy icon"
                 
                 prompt_json = {
                     "product": product_name,
-                    "layout": LOCKED_LAYOUT,
-                    "background": selected_bg_prompt,
+                    "layout": "wide horizontal banner",
+                    "background": selected_bg,
                     "composition": base_comp,
                     "visual_elements": vis_elem,
                     "text_overlay": {"headline": feat, "subline": "Premium Feature"},
-                    "style": LOCKED_STYLE
+                    "style": "professional ecommerce visualization"
                 }
                 prompts_output.append(prompt_json)
 
-            st.subheader("✅ Final Output")
             st.json(prompts_output)
-            json_str = json.dumps(prompts_output, indent=2)
-            st.download_button("⬇️ Download JSON", data=json_str, file_name="smart_prompts.json", mime="application/json")
+            st.download_button("⬇️ Download JSON", data=json.dumps(prompts_output, indent=2), file_name="prompts.json", mime="application/json")
